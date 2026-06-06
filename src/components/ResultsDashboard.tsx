@@ -1,0 +1,821 @@
+"use client";
+
+import { useState, useRef, useEffect } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import {
+  RotateCcw,
+  Plus,
+  Globe,
+  Clock,
+  FileText,
+  Zap,
+  ChevronDown,
+  ChevronUp,
+  FileDown,
+  Search,
+} from "lucide-react";
+import type { AuditReport } from "@/types/audit";
+import { ScoreRing } from "@/components/ScoreRing";
+import { VitalsSection } from "@/components/VitalsSection";
+import { AuditTabs } from "@/components/AuditTabs";
+import { PriorityFixCard } from "@/components/PriorityFixCard";
+import { ScreenshotsSection } from "@/components/ScreenshotsSection";
+import { cn } from "@/lib/utils";
+
+interface Props {
+  report: AuditReport;
+  onReset: () => void;
+  onRescan: () => void;
+}
+
+function fmtDuration(ms: number) {
+  return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
+}
+function fmtBytes(kb: number) {
+  return kb > 1024 ? `${(kb / 1024).toFixed(1)} MB` : `${kb} KB`;
+}
+function getGrade(s: number) {
+  if (s >= 90) return { label: "Excellent", cls: "bg-emerald-500" };
+  if (s >= 70) return { label: "Good", cls: "bg-amber-500" };
+  if (s >= 50) return { label: "Needs Work", cls: "bg-orange-500" };
+  return { label: "Poor", cls: "bg-red-500" };
+}
+
+const LH_CATS = [
+  { key: "performance" as const, label: "Performance" },
+  { key: "seo" as const, label: "SEO" },
+  { key: "accessibility" as const, label: "Accessibility" },
+  { key: "bestPractices" as const, label: "Best Practices" },
+];
+
+const sc = (n: number) =>
+  n >= 90 ? "#16a34a" : n >= 70 ? "#d97706" : n >= 50 ? "#ea580c" : "#dc2626";
+
+const vc = (s: string) =>
+  s === "good" ? "#15803d" : s === "needs-improvement" ? "#b45309" : "#dc2626";
+
+function dl(blob: Blob, name: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function exportJSON(r: AuditReport) {
+  dl(
+    new Blob([JSON.stringify(r, null, 2)], { type: "application/json" }),
+    `crawlscope-${r.domain}.json`,
+  );
+}
+
+function exportMarkdown(r: AuditReport) {
+  const allChecks = [
+    ...r.seoChecks.map((c) => ({ ...c, cat: "SEO" })),
+    ...r.performanceChecks.map((c) => ({ ...c, cat: "Performance" })),
+    ...r.accessibilityChecks.map((c) => ({ ...c, cat: "Accessibility" })),
+    ...r.technicalChecks.map((c) => ({ ...c, cat: "Technical" })),
+    ...r.contentChecks.map((c) => ({ ...c, cat: "Content" })),
+  ];
+  const icon = (s: string) =>
+    s === "pass" ? "✅" : s === "warn" ? "⚠️" : "❌";
+  const lines = [
+    `# CrawlScope Audit Report`,
+    ``,
+    `**URL:** ${r.url}`,
+    `**Scanned:** ${new Date(r.scannedAt).toLocaleString()}`,
+    `**Duration:** ${fmtDuration(r.scanDuration)}`,
+    ``,
+    `---`,
+    ``,
+    `## Overall Score: ${r.overall}/100 — ${getGrade(r.overall).label}`,
+    ``,
+    `| Category | Score |`,
+    `|---|---|`,
+    `| Performance | ${r.lighthouse.performance} |`,
+    `| SEO | ${r.lighthouse.seo} |`,
+    `| Accessibility | ${r.lighthouse.accessibility} |`,
+    `| Best Practices | ${r.lighthouse.bestPractices} |`,
+    ``,
+    `**${r.stats.critical} critical · ${r.stats.warnings} warnings · ${r.stats.passed} passed**`,
+    ``,
+    `---`,
+    ``,
+    `## Page Metadata`,
+    ``,
+    `| Field | Value |`,
+    `|---|---|`,
+    `| Title | ${r.meta.title} |`,
+    `| H1 | ${r.meta.h1} |`,
+    `| Description | ${r.meta.description} |`,
+    `| Word count | ${r.meta.wordCount} |`,
+    `| Page size | ${fmtBytes(r.meta.pageSize)} |`,
+    `| Load time | ${fmtDuration(r.meta.loadTime)} |`,
+    `| HTTP status | ${r.meta.statusCode} |`,
+    r.meta.technologies.length > 0
+      ? `| Technologies | ${r.meta.technologies.join(", ")} |`
+      : ``,
+    ``,
+    `---`,
+    ``,
+    `## Core Web Vitals`,
+    ``,
+    `| Metric | Value | Status | Good | Poor |`,
+    `|---|---|---|---|---|`,
+    ...Object.entries(r.vitals).map(
+      ([k, v]) =>
+        `| **${k.toUpperCase()}** — ${v.label} | ${v.value}${v.unit} | ${v.status} | ${v.threshold.good} | ${v.threshold.poor} |`,
+    ),
+    ``,
+    `---`,
+    ``,
+    `## Priority Fixes (${r.priorityFixes.length})`,
+    ``,
+    ...r.priorityFixes.flatMap((f) => [
+      `### ${f.title}`,
+      `- **Severity:** ${f.severity}  `,
+      `- **Category:** ${f.category}`,
+      ``,
+      `**Why it matters:** ${f.why}`,
+      ``,
+      `**Recommended fix:** ${f.fix}`,
+      ``,
+      `**Expected impact:** ${f.impact}`,
+      ``,
+    ]),
+    `---`,
+    ``,
+    `## Detailed Audit Checks`,
+    ``,
+    ...["SEO", "Performance", "Accessibility", "Technical", "Content"].flatMap(
+      (cat) => [
+        `### ${cat}`,
+        ``,
+        ...allChecks
+          .filter((c) => c.cat === cat)
+          .map(
+            (c) =>
+              `- ${icon(c.status)} **${c.label}**${c.detail ? ` — ${c.detail}` : ""}`,
+          ),
+        ``,
+      ],
+    ),
+    `---`,
+    ``,
+    `*Generated by [CrawlScope](https://crawlscope.io) · See it. Fix it. Ship it.*`,
+  ];
+  dl(
+    new Blob([lines.join("\n")], { type: "text/markdown" }),
+    `crawlscope-${r.domain}.md`,
+  );
+}
+
+function buildExportHTML(r: AuditReport): string {
+  const allChecks = [
+    ...r.seoChecks.map((c) => ({ ...c, cat: "SEO" })),
+    ...r.performanceChecks.map((c) => ({ ...c, cat: "Performance" })),
+    ...r.accessibilityChecks.map((c) => ({ ...c, cat: "Accessibility" })),
+    ...r.technicalChecks.map((c) => ({ ...c, cat: "Technical" })),
+    ...r.contentChecks.map((c) => ({ ...c, cat: "Content" })),
+  ];
+  const statusBg: Record<string, string> = {
+    pass: "background:#f0fdf4;color:#15803d;border:1px solid #bbf7d0",
+    warn: "background:#fffbeb;color:#b45309;border:1px solid #fde68a",
+    fail: "background:#fef2f2;color:#dc2626;border:1px solid #fecaca",
+  };
+  const statusIcon: Record<string, string> = {
+    pass: "✓",
+    warn: "⚠",
+    fail: "✕",
+  };
+  const catC: Record<string, string> = {
+    seo: "#3b82f6",
+    performance: "#8b5cf6",
+    accessibility: "#06b6d4",
+    technical: "#10b981",
+    content: "#f59e0b",
+  };
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CrawlScope Audit — ${r.url}</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;font-size:13px;color:#1e293b;background:#f8fafc;line-height:1.5;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.page{max-width:900px;margin:0 auto;padding:40px 24px 80px}
+h1{font-size:22px;font-weight:700;letter-spacing:-.03em;margin-bottom:3px}
+h2{font-size:14px;font-weight:600;margin:28px 0 10px;color:#0f172a;padding-bottom:6px;border-bottom:2px solid #f1f5f9}
+h3{font-size:12.5px;font-weight:600;margin:18px 0 7px;color:#334155}
+.meta{font-size:11.5px;color:#64748b;margin-bottom:28px}
+.card{background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:20px 24px;margin-bottom:16px;box-shadow:0 1px 4px rgba(0,0,0,.05)}
+.score-row{display:flex;align-items:center;gap:24px;flex-wrap:wrap}
+.big{font-size:52px;font-weight:800;line-height:1;letter-spacing:-.04em}
+.grade{display:inline-block;font-size:10px;font-weight:700;padding:3px 9px;border-radius:6px;color:#fff;margin-bottom:7px;text-transform:uppercase}
+.stat-pills{display:flex;gap:14px;font-size:11px;font-weight:600;margin-top:5px}
+.lh{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;flex:1}
+.lh-item{text-align:center;padding:13px 8px;background:#f8fafc;border-radius:10px;border:1px solid #f1f5f9}
+.lh-score{font-size:24px;font-weight:800}
+.lh-label{font-size:9.5px;color:#64748b;margin-top:3px;font-weight:500}
+.vitals{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
+.vital{padding:12px;background:#f8fafc;border-radius:10px;border:1px solid #f1f5f9}
+.vital-key{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#64748b}
+.vital-val{font-size:22px;font-weight:800;line-height:1.1;margin:4px 0 2px}
+.vital-status{font-size:9.5px;font-weight:600}
+.vital-desc{font-size:10px;color:#94a3b8;margin-top:3px}
+table{width:100%;border-collapse:collapse;font-size:12px;margin-bottom:14px}
+th{background:#f8fafc;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;padding:7px 12px;border:1px solid #e2e8f0;text-align:left}
+td{padding:7px 12px;border:1px solid #e2e8f0;vertical-align:top}
+tr:nth-child(even) td{background:#fafafa}
+.fix{border:1px solid #e2e8f0;border-left:3px solid #94a3b8;border-radius:10px;padding:14px 16px;margin-bottom:10px}
+.fix-title{font-size:13px;font-weight:600;margin-bottom:6px}
+.badges{display:flex;gap:5px;margin-bottom:4px}
+.badge{font-size:9.5px;font-weight:700;padding:2px 7px;border-radius:5px;text-transform:uppercase}
+.fix-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:10px}
+.fix-box{background:#f8fafc;border-radius:8px;padding:10px 12px}
+.fix-box-lbl{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;margin-bottom:4px}
+.fix-box-txt{font-size:11.5px;color:#475569;line-height:1.55}
+.check{display:flex;align-items:flex-start;gap:8px;padding:6px 10px;border-radius:7px;margin-bottom:4px}
+.check-lbl{font-size:12px;font-weight:500;color:#1e293b}
+.check-detail{font-size:11px;margin-top:1px;font-weight:500}
+.footer{margin-top:48px;padding-top:14px;border-top:1px solid #e2e8f0;font-size:11px;color:#94a3b8;display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px}
+</style>
+</head>
+<body>
+<div class="page">
+<h1>CrawlScope Audit Report</h1>
+<p class="meta"><strong>${r.url}</strong> &nbsp;·&nbsp; ${new Date(r.scannedAt).toLocaleString()} &nbsp;·&nbsp; Scan completed in ${fmtDuration(r.scanDuration)}</p>
+
+<div class="card">
+<div class="score-row">
+  <div>
+    <div class="grade" style="background:${sc(r.overall)}">${getGrade(r.overall).label}</div>
+    <div class="big" style="color:${sc(r.overall)}">${r.overall}<span style="font-size:20px;color:#94a3b8;font-weight:400">/100</span></div>
+    <div class="stat-pills">
+      <span style="color:#dc2626">${r.stats.critical} critical</span>
+      <span style="color:#d97706">${r.stats.warnings} warnings</span>
+      <span style="color:#16a34a">${r.stats.passed} passed</span>
+    </div>
+  </div>
+  <div class="lh">
+    ${LH_CATS.map(
+      ({ key, label }) => `
+    <div class="lh-item">
+      <div class="lh-score" style="color:${sc(r.lighthouse[key])}">${r.lighthouse[key]}</div>
+      <div class="lh-label">${label}</div>
+    </div>`,
+    ).join("")}
+  </div>
+</div>
+</div>
+
+<h2>Core Web Vitals</h2>
+<div class="card" style="padding:16px 20px">
+<div class="vitals">
+${Object.entries(r.vitals)
+  .map(
+    ([k, v]) => `
+<div class="vital">
+  <div class="vital-key">${k.toUpperCase()}</div>
+  <div class="vital-val" style="color:${vc(v.status)}">${v.value}<span style="font-size:13px;font-weight:400;opacity:.65">${v.unit}</span></div>
+  <div class="vital-status" style="color:${vc(v.status)}">${v.status === "good" ? "Good" : v.status === "needs-improvement" ? "Needs Improvement" : "Poor"}</div>
+  <div class="vital-desc">${v.label}</div>
+</div>`,
+  )
+  .join("")}
+</div>
+</div>
+
+<h2>Page Metadata</h2>
+<div class="card" style="padding:16px 20px">
+<table>
+  <tr><th>Field</th><th>Value</th></tr>
+  <tr><td><strong>Title</strong></td><td>${r.meta.title}</td></tr>
+  <tr><td><strong>H1</strong></td><td>${r.meta.h1}</td></tr>
+  <tr><td><strong>Description</strong></td><td>${r.meta.description}</td></tr>
+  <tr><td><strong>Word count</strong></td><td>${r.meta.wordCount.toLocaleString()}</td></tr>
+  <tr><td><strong>Page size</strong></td><td>${fmtBytes(r.meta.pageSize)}</td></tr>
+  <tr><td><strong>Load time</strong></td><td>${fmtDuration(r.meta.loadTime)}</td></tr>
+  <tr><td><strong>HTTP status</strong></td><td>${r.meta.statusCode}</td></tr>
+  ${r.meta.technologies.length ? `<tr><td><strong>Technologies</strong></td><td>${r.meta.technologies.join(", ")}</td></tr>` : ""}
+</table>
+</div>
+
+<h2>Priority Fixes (${r.priorityFixes.length})</h2>
+${r.priorityFixes
+  .map((f) => {
+    const bc =
+      f.severity === "critical"
+        ? "#ef4444"
+        : f.severity === "warning"
+          ? "#f59e0b"
+          : "#3b82f6";
+    return `
+<div class="fix" style="border-left-color:${bc}">
+  <div class="fix-title">${f.title}</div>
+  <div class="badges">
+    <span class="badge" style="background:${f.severity === "critical" ? "#fef2f2" : "#fffbeb"};color:${bc}">${f.severity}</span>
+    <span class="badge" style="background:#f8fafc;color:${catC[f.category] ?? "#64748b"}">${f.category}</span>
+  </div>
+  <div class="fix-grid">
+    <div class="fix-box"><div class="fix-box-lbl" style="color:#3b82f6">Why it matters</div><div class="fix-box-txt">${f.why}</div></div>
+    <div class="fix-box"><div class="fix-box-lbl" style="color:#8b5cf6">Recommended fix</div><div class="fix-box-txt">${f.fix}</div></div>
+    <div class="fix-box"><div class="fix-box-lbl" style="color:#10b981">Expected impact</div><div class="fix-box-txt">${f.impact}</div></div>
+  </div>
+</div>`;
+  })
+  .join("")}
+
+<h2>Detailed Audit Checks</h2>
+${["SEO", "Performance", "Accessibility", "Technical", "Content"]
+  .map((cat) => {
+    const rows = allChecks
+      .filter((c) => c.cat === cat)
+      .sort((a, b) => {
+        const o: Record<string, number> = { fail: 0, warn: 1, pass: 2 };
+        return o[a.status] - o[b.status];
+      });
+    return `
+<h3>${cat}</h3>
+${rows
+  .map(
+    (c) => `
+<div class="check" style="${statusBg[c.status]}">
+  <span style="font-size:12px;font-weight:700;margin-top:1px;min-width:13px;color:${c.status === "pass" ? "#16a34a" : c.status === "warn" ? "#d97706" : "#dc2626"}">${statusIcon[c.status]}</span>
+  <div>
+    <div class="check-lbl">${c.label}</div>
+    ${c.detail ? `<div class="check-detail" style="color:${c.status === "pass" ? "#15803d" : c.status === "warn" ? "#b45309" : "#dc2626"}">${c.detail}</div>` : ""}
+  </div>
+</div>`,
+  )
+  .join("")}`;
+  })
+  .join("")}
+
+<div class="footer">
+  <span>Generated by <strong>CrawlScope</strong> · See it. Fix it. Ship it.</span>
+  <span>${new Date(r.scannedAt).toLocaleString()}</span>
+</div>
+</div>
+</body>
+</html>`;
+}
+
+function exportHTML(r: AuditReport) {
+  dl(
+    new Blob([buildExportHTML(r)], { type: "text/html" }),
+    `crawlscope-${r.domain}.html`,
+  );
+}
+
+function exportPDF(r: AuditReport) {
+  const w = window.open("", "_blank");
+  if (!w) return;
+  const base = buildExportHTML(r);
+  const injected = base
+    .replace(
+      "@media print{",
+      `@page{size:A4;margin:14mm 12mm}@media print{body{background:#fff}.page{padding:0 4px}`,
+    )
+    .replace(
+      "</body>",
+      `<script>window.addEventListener('load',()=>{setTimeout(()=>{window.print();setTimeout(()=>window.close(),800)},300)})<\/script></body>`,
+    );
+  w.document.write(injected);
+  w.document.close();
+}
+
+function ExportMenu({ report }: { report: AuditReport }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const h = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node))
+        setOpen(false);
+    };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, []);
+
+  const items = [
+    { label: "Markdown (.md)", action: () => exportMarkdown(report) },
+    { label: "HTML (.html)", action: () => exportHTML(report) },
+    { label: "PDF (print)", action: () => exportPDF(report) },
+    { label: "JSON (.json)", action: () => exportJSON(report) },
+  ];
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium text-slate-500 bg-white/70 hover:bg-white border border-slate-200 rounded-lg transition-all"
+      >
+        <FileDown className="h-3 w-3" />
+        Export
+        <ChevronDown
+          className={cn(
+            "h-3 w-3 transition-transform duration-200",
+            open && "rotate-180",
+          )}
+        />
+      </button>
+
+      <AnimatePresence>
+        {open && (
+          <>
+            <div
+              className="fixed inset-0 z-40"
+              onClick={() => setOpen(false)}
+            />
+            <motion.div
+              initial={{ opacity: 0, y: -5, scale: 0.97 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -5, scale: 0.97 }}
+              transition={{ duration: 0.14, ease: [0.16, 1, 0.3, 1] }}
+              className="absolute right-0 top-full mt-1.5 z-50 bg-white/95 backdrop-blur-md border border-slate-200 rounded-xl shadow-xl overflow-hidden min-w-[168px]"
+            >
+              {items.map(({ label, action }) => (
+                <button
+                  key={label}
+                  onClick={() => {
+                    action();
+                    setOpen(false);
+                  }}
+                  className="w-full flex items-center px-4 py-2.5 text-[11.5px] text-slate-600 hover:bg-slate-50 transition-colors text-left font-medium"
+                >
+                  {label}
+                </button>
+              ))}
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+export function ResultsDashboard({ report, onReset, onRescan }: Props) {
+  const [fixesOpen, setFixesOpen] = useState(true);
+  const grade = getGrade(report.overall);
+
+  const fadeUp = (delay = 0) => ({
+    initial: { opacity: 0, y: 12 },
+    animate: { opacity: 1, y: 0 },
+    transition: { duration: 0.38, delay, ease: [0.16, 1, 0.3, 1] as number[] },
+  });
+
+  return (
+    <div
+      className="relative min-h-screen"
+      style={{ fontFamily: "'Inter','DM Sans',system-ui,sans-serif" }}
+    >
+      <div
+        className="fixed inset-0 -z-10"
+        style={{
+          background:
+            "radial-gradient(ellipse 45% 70% at 0% 50%, #dde3ec 0%, transparent 65%), radial-gradient(ellipse 45% 70% at 100% 50%, #dde3ec 0%, transparent 65%), #f8fafc",
+        }}
+      />
+
+      <header className="sticky top-0 z-50 bg-white/75 backdrop-blur-xl border-b border-white/60 shadow-[0_1px_3px_rgba(0,0,0,.06)]">
+        <div className="max-w-6xl mx-auto px-5 h-12 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-6 h-6 bg-slate-900 rounded-md flex items-center justify-center shrink-0">
+              <Search className="w-3 h-3 text-white" />
+            </div>
+            <div className="hidden sm:flex items-center gap-1.5 min-w-0">
+              <Globe className="h-3 w-3 text-slate-400 shrink-0" />
+              <span className="text-[11.5px] text-slate-600 font-medium truncate">
+                {report.url}
+              </span>
+              <span className="text-slate-300 shrink-0 text-xs">·</span>
+              <span className="text-[11px] text-slate-400 shrink-0 hidden md:block">
+                {new Date(report.scannedAt).toLocaleString()}
+              </span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <ExportMenu report={report} />
+            <button
+              onClick={onRescan}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium text-slate-500 bg-white/70 hover:bg-white border border-slate-200 rounded-lg transition-all"
+            >
+              <RotateCcw className="h-3 w-3" />
+              Re-scan
+            </button>
+            <button
+              onClick={onReset}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-all"
+            >
+              <Plus className="h-3 w-3" />
+              New Scan
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-6xl mx-auto px-5 py-5 space-y-4">
+        <motion.div
+          {...fadeUp(0)}
+          className="rounded-2xl bg-white/55 backdrop-blur-sm border border-white/75 shadow-sm shadow-slate-200/60 p-5"
+        >
+          <div className="flex flex-col sm:flex-row gap-5 items-center">
+            <div className="flex items-center gap-4 shrink-0">
+              <ScoreRing
+                score={report.overall}
+                size={84}
+                strokeWidth={6}
+                showValue
+              />
+              <div>
+                <span
+                  className={`inline-flex items-center px-2 py-0.5 rounded-md text-white text-[9.5px] font-semibold mb-1.5 tracking-wide ${grade.cls}`}
+                >
+                  {grade.label}
+                </span>
+                <p className="text-[22px] font-bold text-slate-900 tracking-tight leading-none">
+                  {report.overall}
+                  <span className="text-sm font-normal text-slate-400 ml-0.5">
+                    /100
+                  </span>
+                </p>
+                <p className="text-[10.5px] text-slate-400 mt-0.5 mb-1.5">
+                  Overall Score
+                </p>
+                <div className="flex items-center gap-2.5 text-[10.5px] font-medium">
+                  <span className="text-red-500">
+                    {report.stats.critical} critical
+                  </span>
+                  <span className="text-amber-500">
+                    {report.stats.warnings} warnings
+                  </span>
+                  <span className="text-emerald-600">
+                    {report.stats.passed} passed
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="hidden sm:block w-px bg-slate-100 self-stretch" />
+
+            <div className="flex-1 grid grid-cols-4 gap-3">
+              {LH_CATS.map(({ key, label }) => (
+                <div key={key} className="flex flex-col items-center gap-1.5">
+                  <ScoreRing
+                    score={report.lighthouse[key]}
+                    size={58}
+                    strokeWidth={5}
+                    showValue
+                  />
+                  <p className="text-[10px] text-slate-500 text-center font-medium leading-tight">
+                    {label}
+                  </p>
+                </div>
+              ))}
+            </div>
+
+            <div className="hidden sm:block w-px bg-slate-100 self-stretch" />
+
+            <div className="flex flex-col gap-2.5 shrink-0">
+              {[
+                {
+                  icon: Clock,
+                  label: "Load time",
+                  value: fmtDuration(report.meta.loadTime),
+                },
+                {
+                  icon: FileText,
+                  label: "Page size",
+                  value: fmtBytes(report.meta.pageSize),
+                },
+                {
+                  icon: Zap,
+                  label: "Scan time",
+                  value: fmtDuration(report.scanDuration),
+                },
+              ].map(({ icon: Icon, label, value }) => (
+                <div key={label} className="flex items-center gap-2">
+                  <Icon className="h-3 w-3 text-slate-300 shrink-0" />
+                  <span className="text-[10.5px] text-slate-400 w-14">
+                    {label}
+                  </span>
+                  <span className="text-[10.5px] font-semibold text-slate-700">
+                    {value}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </motion.div>
+
+        <div className="grid lg:grid-cols-[1fr_344px] gap-4">
+          <div className="space-y-4 min-w-0">
+            {report.priorityFixes.length > 0 && (
+              <motion.div
+                {...fadeUp(0.06)}
+                className="rounded-2xl bg-white/55 backdrop-blur-sm border border-white/75 shadow-sm shadow-slate-200/60 overflow-hidden"
+              >
+                <button
+                  onClick={() => setFixesOpen((v) => !v)}
+                  className="w-full flex items-center justify-between px-5 py-3.5 hover:bg-white/40 transition-colors"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-[12.5px] font-semibold text-slate-800 tracking-tight">
+                      Priority Fixes
+                    </span>
+                    <span className="bg-red-100 text-red-600 text-[9.5px] font-bold px-1.5 py-0.5 rounded-full">
+                      {report.priorityFixes.length}
+                    </span>
+                  </div>
+                  <AnimatePresence mode="wait" initial={false}>
+                    <motion.div
+                      key={fixesOpen ? "up" : "dn"}
+                      initial={{ rotate: fixesOpen ? -90 : 90, opacity: 0 }}
+                      animate={{ rotate: 0, opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      transition={{ duration: 0.14 }}
+                    >
+                      {fixesOpen ? (
+                        <ChevronUp className="h-3.5 w-3.5 text-slate-400" />
+                      ) : (
+                        <ChevronDown className="h-3.5 w-3.5 text-slate-400" />
+                      )}
+                    </motion.div>
+                  </AnimatePresence>
+                </button>
+
+                <AnimatePresence initial={false}>
+                  {fixesOpen && (
+                    <motion.div
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: "auto", opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
+                      style={{ overflow: "hidden" }}
+                    >
+                      <div className="px-5 pb-5 space-y-2.5">
+                        {report.priorityFixes.map((fix) => (
+                          <PriorityFixCard key={fix.id} fix={fix} />
+                        ))}
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </motion.div>
+            )}
+
+            <motion.div
+              {...fadeUp(0.1)}
+              className="rounded-2xl bg-white/55 backdrop-blur-sm border border-white/75 shadow-sm shadow-slate-200/60 p-5"
+            >
+              <AuditTabs report={report} />
+            </motion.div>
+          </div>
+
+          <div className="space-y-4">
+            <motion.div
+              {...fadeUp(0.13)}
+              className="rounded-2xl bg-white/55 backdrop-blur-sm border border-white/75 shadow-sm shadow-slate-200/60 p-5"
+            >
+              <p className="text-[11.5px] font-semibold text-slate-700 tracking-tight mb-3.5">
+                Core Web Vitals
+              </p>
+              <VitalsSection vitals={report.vitals} />
+            </motion.div>
+
+            <motion.div
+              {...fadeUp(0.17)}
+              className="rounded-2xl bg-white/55 backdrop-blur-sm border border-white/75 shadow-sm shadow-slate-200/60 p-5 space-y-3.5"
+            >
+              <p className="text-[11.5px] font-semibold text-slate-700 tracking-tight">
+                Page Metadata
+              </p>
+              {[
+                { label: "Title", value: report.meta.title },
+                { label: "H1", value: report.meta.h1 },
+                { label: "Description", value: report.meta.description },
+              ].map(({ label, value }) => (
+                <div key={label}>
+                  <p className="text-[9px] font-semibold text-slate-400 uppercase tracking-widest mb-0.5">
+                    {label}
+                  </p>
+                  <p className="text-[11px] text-slate-600 leading-relaxed">
+                    {value || "—"}
+                  </p>
+                </div>
+              ))}
+              <div className="grid grid-cols-2 gap-3 pt-3 border-t border-slate-100/80">
+                {[
+                  {
+                    label: "Words",
+                    value: report.meta.wordCount.toLocaleString(),
+                  },
+                  { label: "Status", value: `HTTP ${report.meta.statusCode}` },
+                ].map(({ label, value }) => (
+                  <div key={label}>
+                    <p className="text-[9px] font-semibold text-slate-400 uppercase tracking-widest mb-0.5">
+                      {label}
+                    </p>
+                    <p className="text-[11px] font-semibold text-slate-700">
+                      {value}
+                    </p>
+                  </div>
+                ))}
+              </div>
+              {report.meta.technologies.length > 0 && (
+                <div className="pt-3 border-t border-slate-100/80">
+                  <p className="text-[9px] font-semibold text-slate-400 uppercase tracking-widest mb-2">
+                    Technologies
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {report.meta.technologies.map((t) => (
+                      <span
+                        key={t}
+                        className="text-[10px] font-medium bg-slate-100/80 text-slate-600 px-2 py-0.5 rounded-md"
+                      >
+                        {t}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </motion.div>
+
+            {(report.screenshots.desktop || report.screenshots.mobile) && (
+              <motion.div
+                {...fadeUp(0.21)}
+                className="rounded-2xl bg-white/55 backdrop-blur-sm border border-white/75 shadow-sm shadow-slate-200/60 p-5"
+              >
+                <p className="text-[11.5px] font-semibold text-slate-700 tracking-tight mb-3.5">
+                  Screenshots
+                </p>
+                <ScreenshotsSection screenshots={report.screenshots} />
+              </motion.div>
+            )}
+          </div>
+        </div>
+      </main>
+
+      <footer className="mt-8 border-t border-slate-200/60 bg-white/40 backdrop-blur-sm">
+        <div className="max-w-6xl mx-auto px-5 py-4 flex items-center justify-between flex-wrap gap-3">
+          <div className="flex items-center gap-2">
+            <div className="w-5 h-5 bg-slate-900 rounded-md flex items-center justify-center">
+              <Search className="w-2.5 h-2.5 text-white" />
+            </div>
+            <span className="text-[11.5px] font-semibold text-slate-700">
+              CrawlScope
+            </span>
+            <span className="text-[11px] text-slate-400">
+              · See it. Fix it. Ship it.
+            </span>
+          </div>
+          <div className="flex items-center gap-4">
+            <a
+              href="/features"
+              className="text-[10.5px] text-slate-400 hover:text-slate-600 transition-colors font-medium"
+            >
+              Features
+            </a>
+
+            <a
+              href="/docs"
+              className="text-[10.5px] text-slate-400 hover:text-slate-600 transition-colors font-medium"
+            >
+              Docs
+            </a>
+
+            <a
+              href="https://github.com/code2ahm/crawlscope"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[10.5px] text-slate-400 hover:text-slate-600 transition-colors font-medium"
+            >
+              GitHub
+            </a>
+
+            <a
+              href="/api-page"
+              className="text-[10.5px] text-slate-400 hover:text-slate-600 transition-colors font-medium"
+            >
+              API
+            </a>
+
+            <a
+              href="/privacy"
+              className="text-[10.5px] text-slate-400 hover:text-slate-600 transition-colors font-medium"
+            >
+              Privacy
+            </a>
+          </div>
+          <p className="text-[10.5px] text-slate-400">
+            Scanned {new Date(report.scannedAt).toLocaleString()}
+          </p>
+        </div>
+      </footer>
+    </div>
+  );
+}
