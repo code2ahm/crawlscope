@@ -49,6 +49,8 @@ export async function scanWebsite(rawUrl: string): Promise<AuditReport> {
   const puppeteer = await import("puppeteer-core");
   const lighthouse = await import("lighthouse");
 
+  process.env.LH_LOCALE = "en-US";
+
   const browser = await puppeteer.default.launch({
     args: chromium.default.args,
     defaultViewport: { width: 1280, height: 800 },
@@ -120,6 +122,7 @@ export async function scanWebsite(rawUrl: string): Promise<AuditReport> {
       onlyCategories: ["performance", "seo", "accessibility", "best-practices"],
       formFactor: "desktop",
       screenEmulation: { disabled: true },
+      locale: "en-US",
     });
 
     lhReport = (lhResult?.lhr ?? {}) as Record<string, unknown>;
