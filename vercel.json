@@ -1,0 +1,8 @@
+{
+  "functions": {
+    "src/app/api/scan/route.ts": {
+      "memory": 3008,
+      "maxDuration": 60
+    }
+  }
+}
