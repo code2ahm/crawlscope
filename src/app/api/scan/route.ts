@@ -1,14 +1,39 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { ScanResponse } from "@/types/audit";
 
-export const maxDuration = 120;
+const SCAN_DEADLINE_MS = 52_000;
+
+export const maxDuration = 60;
 export const dynamic = "force-dynamic";
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(
+        new Error(
+          "Scan timed out before CrawlScope could finish. Try a lighter page or run the scan again.",
+        ),
+      );
+    }, ms);
+
+    promise.then(
+      (value) => {
+        clearTimeout(timeout);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timeout);
+        reject(err);
+      },
+    );
+  });
+}
 
 export async function POST(
   req: NextRequest,
 ): Promise<NextResponse<ScanResponse>> {
   try {
-    const body = await req.json();
+    const body = await req.json().catch(() => null);
     const rawUrl: string = body?.url ?? "";
 
     if (!rawUrl) {
@@ -30,7 +55,10 @@ export async function POST(
     }
 
     const { scanWebsite } = await import("@/lib/scanner");
-    const report = await scanWebsite(url);
+    const report = await withTimeout(
+      scanWebsite(url, { deadlineAt: Date.now() + SCAN_DEADLINE_MS }),
+      SCAN_DEADLINE_MS,
+    );
 
     return NextResponse.json({ success: true, report });
   } catch (err: unknown) {
