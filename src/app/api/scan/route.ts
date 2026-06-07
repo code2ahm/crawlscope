@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { ScanResponse } from "@/types/audit";
 
-const SCAN_DEADLINE_MS = 52_000;
+const SCAN_DEADLINE_MS = 42_000;
 
 export const maxDuration = 60;
 export const dynamic = "force-dynamic";
