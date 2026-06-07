@@ -33,6 +33,8 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 export async function POST(
   req: NextRequest,
 ): Promise<NextResponse<ScanResponse>> {
+  let url = "";
+
   try {
     const body = await req.json().catch(() => null);
     const rawUrl: string = body?.url ?? "";
@@ -44,7 +46,7 @@ export async function POST(
       );
     }
 
-    let url = rawUrl.trim();
+    url = rawUrl.trim();
     if (!/^https?:\/\//i.test(url)) url = "https://" + url;
     try {
       new URL(url);
@@ -72,6 +74,14 @@ export async function POST(
         : message.toLowerCase().includes("timed out")
           ? "timeout"
           : "scan_failed";
+
+    if (errorCode === "timeout" && url) {
+      const { createTimeoutReport } = await import("@/lib/scanner");
+      return NextResponse.json({
+        success: true,
+        report: createTimeoutReport(url, message),
+      });
+    }
 
     return NextResponse.json(
       { success: false, error: message, errorCode },

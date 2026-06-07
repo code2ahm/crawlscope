@@ -113,6 +113,118 @@ function withTimeout<T>(
   });
 }
 
+function fallbackVital(
+  label: string,
+  description: string,
+): CoreWebVitals[keyof CoreWebVitals] {
+  return {
+    value: "N/A",
+    unit: "",
+    status: "needs-improvement",
+    label,
+    description,
+    recommendation:
+      "The page did not finish scanning within the available serverless time budget.",
+    threshold: { good: "N/A", poor: "N/A" },
+  };
+}
+
+export function createTimeoutReport(rawUrl: string, reason: string): AuditReport {
+  const url = /^https?:\/\//i.test(rawUrl.trim())
+    ? rawUrl.trim()
+    : `https://${rawUrl.trim()}`;
+  const parsedUrl = new URL(url);
+  const domain = parsedUrl.hostname;
+
+  const timeoutCheck: AuditCheck = check(
+    "scan-timeout",
+    "Scan completed with limited data",
+    "warn",
+    reason,
+    undefined,
+    "Some pages take longer than a Hobby serverless function can safely analyse.",
+    "CrawlScope returned a minimal report instead of failing the scan. Re-run later or scan a lighter page path.",
+    "You still get URL-level metadata and a clear reason for the limited result.",
+  );
+
+  return {
+    url,
+    domain,
+    scannedAt: new Date().toISOString(),
+    scanDuration: 0,
+    overall: 0,
+    lighthouse: {
+      performance: 0,
+      seo: 0,
+      accessibility: 0,
+      bestPractices: 0,
+    },
+    vitals: {
+      lcp: fallbackVital(
+        "Largest Contentful Paint",
+        "LCP was not measured because the scan timed out.",
+      ),
+      cls: fallbackVital(
+        "Cumulative Layout Shift",
+        "CLS was not measured because the scan timed out.",
+      ),
+      inp: fallbackVital(
+        "Interaction to Next Paint",
+        "INP was not measured because the scan timed out.",
+      ),
+      ttfb: fallbackVital(
+        "Time to First Byte",
+        "TTFB was not measured because the scan timed out.",
+      ),
+      fcp: fallbackVital(
+        "First Contentful Paint",
+        "FCP was not measured because the scan timed out.",
+      ),
+    },
+    stats: {
+      critical: 0,
+      warnings: 1,
+      passed: 0,
+      total: 1,
+    },
+    priorityFixes: [
+      {
+        id: "fix-timeout",
+        severity: "warning",
+        title: "Scan Timed Out",
+        category: "technical",
+        why: "This page could not be fully analysed within the available serverless time budget.",
+        fix: "Try scanning a smaller route, reduce blocking scripts, or run the scanner in a higher-timeout environment.",
+        impact:
+          "Allows CrawlScope to complete Lighthouse, screenshots, and deeper technical checks.",
+      },
+    ],
+    seoChecks: [timeoutCheck],
+    performanceChecks: [],
+    accessibilityChecks: [],
+    technicalChecks: [],
+    contentChecks: [],
+    screenshots: {},
+    warnings: [
+      {
+        id: "scan-timeout",
+        title: "Limited report returned",
+        detail: reason,
+      },
+    ],
+    meta: {
+      title: "(Scan timed out)",
+      description: "(Scan timed out before metadata could be extracted)",
+      h1: "(Scan timed out)",
+      wordCount: 0,
+      loadTime: 0,
+      pageSize: 0,
+      statusCode: 0,
+      technologies: [],
+    },
+  };
+}
+
 export async function scanWebsite(
   rawUrl: string,
   options: ScanOptions = {},
