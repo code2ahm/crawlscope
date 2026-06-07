@@ -58,8 +58,8 @@ export default function ScanPage() {
           <p className="text-slate-900 font-semibold mb-1">Scan failed</p>
           <p className="text-slate-500 text-sm mb-5 leading-relaxed">{error}</p>
           <button
-            onClick={() => router.push("/")}
-            className="w-full px-4 py-2.5 bg-slate-900 text-white text-sm font-medium rounded-xl hover:bg-slate-800 active:scale-[0.98] transition-all"
+            onClick={() => router.replace("/")}
+            className="btn-press w-full px-4 py-2.5 bg-slate-900 text-white text-sm font-medium rounded-xl hover:bg-slate-800"
           >
             Try another URL
           </button>
@@ -73,7 +73,7 @@ export default function ScanPage() {
   return (
     <ResultsDashboard
       report={report}
-      onReset={() => router.push("/")}
+      onReset={() => router.replace("/")}
       onRescan={() =>
         router.push(`/scan?url=${encodeURIComponent(url)}&t=${Date.now()}`)
       }

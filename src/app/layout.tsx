@@ -1,5 +1,6 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { ServiceWorkerRegister } from "@/components/ServiceWorkerRegister";
 import "./globals.css";
 
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
@@ -61,7 +62,7 @@ export const metadata: Metadata = {
         url: "/preview.png",
         width: 1200,
         height: 630,
-        alt: "CrawlScope — See it. Fix it. Ship it.",
+        alt: "CrawlScope - See it. Fix it. Ship it.",
       },
     ],
   },
@@ -88,7 +89,16 @@ export const metadata: Metadata = {
   },
 
   manifest: "/site.webmanifest",
+  appleWebApp: {
+    capable: true,
+    title: "CrawlScope",
+    statusBarStyle: "default",
+  },
   category: "technology",
+};
+
+export const viewport: Viewport = {
+  themeColor: "#0f172a",
 };
 
 export default function RootLayout({
@@ -101,6 +111,7 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
+        <ServiceWorkerRegister />
         {children}
       </body>
     </html>

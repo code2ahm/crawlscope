@@ -32,7 +32,23 @@ body {
 
 button,
 a {
-  transition: all 0.15s ease;
+  transition:
+    transform 0.18s cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 0.18s cubic-bezier(0.16, 1, 0.3, 1),
+    background-color 0.18s ease,
+    border-color 0.18s ease,
+    color 0.18s ease,
+    opacity 0.18s ease;
+}
+
+button:not(:disabled):hover,
+.btn-press:hover {
+  transform: translateY(-1px);
+}
+
+button:not(:disabled):active,
+.btn-press:active {
+  transform: translateY(0) scale(0.98);
 }
 
 ::-webkit-scrollbar {
