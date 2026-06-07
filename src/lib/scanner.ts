@@ -235,31 +235,9 @@ export async function scanWebsite(
   if (!/^https?:\/\//i.test(url)) url = "https://" + url;
   const parsedUrl = new URL(url);
   const domain = parsedUrl.hostname;
-
-  const chromium = await import("@sparticuz/chromium-min");
-  const puppeteer = await import("puppeteer-core");
   const deadlineAt = options.deadlineAt;
 
   process.env.LH_LOCALE = "en-US";
-
-  const executablePath = await withTimeout(
-    chromium.default.executablePath(
-      "https://github.com/Sparticuz/chromium/releases/download/v131.0.1/chromium-v131.0.1-pack.tar",
-    ),
-    remainingMs(deadlineAt, 12_000),
-    "Chromium startup timed out.",
-  );
-
-  const browser = await withTimeout(
-    puppeteer.default.launch({
-      args: chromium.default.args,
-      defaultViewport: { width: 1280, height: 800 },
-      executablePath,
-      headless: true,
-    }),
-    remainingMs(deadlineAt, 12_000),
-    "Browser launch timed out.",
-  );
 
   let lhReport: Record<string, unknown> = {};
   let htmlContent = "";
@@ -270,17 +248,43 @@ export async function scanWebsite(
   let pageSize = 0;
   const warnings: ScanWarning[] = [];
 
-  try {
-    const page = await browser.newPage();
+  let browserSucceeded = false;
 
+  // --- Phase 1: Browser-based scan (screenshots + Lighthouse) ---
+  // Only attempted if enough time budget remains
+  if (hasBudget(deadlineAt, 18_000)) {
+    let browser: Awaited<ReturnType<typeof import("puppeteer-core")["default"]["launch"]>> | null = null;
     try {
+      const chromium = await import("@sparticuz/chromium-min");
+      const puppeteer = await import("puppeteer-core");
+
+      const executablePath = await withTimeout(
+        chromium.default.executablePath(
+          "https://github.com/Sparticuz/chromium/releases/download/v131.0.1/chromium-v131.0.1-pack.tar",
+        ),
+        remainingMs(deadlineAt, 8_000),
+        "Chromium startup timed out.",
+      );
+
+      browser = await withTimeout(
+        puppeteer.default.launch({
+          args: chromium.default.args,
+          defaultViewport: { width: 1280, height: 800 },
+          executablePath,
+          headless: true,
+        }),
+        remainingMs(deadlineAt, 8_000),
+        "Browser launch timed out.",
+      );
+
+      const page = await browser.newPage();
       await page.setViewport({ width: 1280, height: 800 });
 
       const navStart = Date.now();
       const response = await page
         .goto(url, {
           waitUntil: "networkidle2",
-          timeout: remainingMs(deadlineAt, 12_000),
+          timeout: remainingMs(deadlineAt, 10_000),
         })
         .catch(async (err: unknown) => {
           warnings.push({
@@ -288,17 +292,15 @@ export async function scanWebsite(
             title: "Page kept loading",
             detail: `The page did not become fully idle, so CrawlScope continued after the main document loaded. ${errorMessage(err)}`,
           });
-
           return page.goto(url, {
             waitUntil: "domcontentloaded",
-            timeout: remainingMs(deadlineAt, 6_000),
+            timeout: remainingMs(deadlineAt, 5_000),
           }).catch((fallbackErr: unknown) => {
             warnings.push({
               id: "navigation-timeout",
               title: "Page navigation timed out",
               detail: `CrawlScope used the partial page HTML that loaded before navigation timed out. ${errorMessage(fallbackErr)}`,
             });
-
             return null;
           });
         });
@@ -319,20 +321,15 @@ export async function scanWebsite(
       }
 
       try {
-        if (!hasBudget(deadlineAt, 8_000)) {
+        if (!hasBudget(deadlineAt, 7_000)) {
           warnings.push({
             id: "desktop-screenshot-budget",
             title: "Desktop screenshot skipped",
-            detail:
-              "The page used most of the scan time budget, so CrawlScope skipped the desktop screenshot and continued the report.",
+            detail: "The page used most of the scan time budget, so CrawlScope skipped the desktop screenshot and continued the report.",
           });
         } else {
           const desktopBuf = await withTimeout(
-            page.screenshot({
-              type: "jpeg",
-              quality: 45,
-              fullPage: false,
-            }),
+            page.screenshot({ type: "jpeg", quality: 45, fullPage: false }),
             remainingMs(deadlineAt, 3_000),
             "Desktop screenshot timed out.",
           );
@@ -347,30 +344,17 @@ export async function scanWebsite(
       }
 
       try {
-        if (!hasBudget(deadlineAt, 10_000)) {
+        if (!hasBudget(deadlineAt, 8_000)) {
           warnings.push({
             id: "mobile-screenshot-budget",
             title: "Mobile screenshot skipped",
-            detail:
-              "The page used most of the scan time budget, so CrawlScope skipped the mobile screenshot and continued the report.",
+            detail: "The page used most of the scan time budget, so CrawlScope skipped the mobile screenshot and continued the report.",
           });
         } else {
-          await page.setViewport({
-            width: 390,
-            height: 844,
-            isMobile: true,
-            deviceScaleFactor: 1,
-          });
-          await page.reload({
-            waitUntil: "domcontentloaded",
-            timeout: remainingMs(deadlineAt, 5_000),
-          });
+          await page.setViewport({ width: 390, height: 844, isMobile: true, deviceScaleFactor: 1 });
+          await page.reload({ waitUntil: "domcontentloaded", timeout: remainingMs(deadlineAt, 4_000) });
           const mobileBuf = await withTimeout(
-            page.screenshot({
-              type: "jpeg",
-              quality: 42,
-              fullPage: false,
-            }),
+            page.screenshot({ type: "jpeg", quality: 42, fullPage: false }),
             remainingMs(deadlineAt, 3_000),
             "Mobile screenshot timed out.",
           );
@@ -383,55 +367,93 @@ export async function scanWebsite(
           detail: `The scan continued, but CrawlScope could not capture the mobile screenshot. ${errorMessage(err)}`,
         });
       }
-    } finally {
+
       await page.close();
-    }
 
-    const wsEndpoint = browser.wsEndpoint();
-    const port = parseInt(new URL(wsEndpoint).port, 10);
+      const wsEndpoint = browser.wsEndpoint();
+      const port = parseInt(new URL(wsEndpoint).port, 10);
 
-    try {
-      if (!hasBudget(deadlineAt, 16_000)) {
+      try {
+        if (!hasBudget(deadlineAt, 14_000)) {
+          warnings.push({
+            id: "lighthouse-budget",
+            title: "Lighthouse audit skipped",
+            detail: "The page used most of the scan time budget, so CrawlScope skipped Lighthouse and continued with HTML analysis.",
+          });
+        } else {
+          const lighthouse = await import("lighthouse");
+          const lhResult = await withTimeout(
+            lighthouse.default(url, {
+              port,
+              output: "json",
+              logLevel: "error",
+              onlyCategories: ["performance", "seo", "accessibility", "best-practices"],
+              formFactor: "desktop",
+              screenEmulation: { disabled: true },
+              maxWaitForFcp: 6_000,
+              maxWaitForLoad: 10_000,
+              locale: "en-US",
+            }),
+            remainingMs(deadlineAt, 12_000),
+            "Lighthouse timed out.",
+          );
+          lhReport = (lhResult?.lhr ?? {}) as Record<string, unknown>;
+        }
+      } catch (err: unknown) {
         warnings.push({
-          id: "lighthouse-budget",
+          id: "lighthouse",
           title: "Lighthouse audit skipped",
-          detail:
-            "The page used most of the scan time budget, so CrawlScope skipped Lighthouse and continued with HTML analysis.",
+          detail: `The scan continued with HTML analysis, but Lighthouse could not complete. ${errorMessage(err)}`,
         });
-      } else {
-        const lighthouse = await import("lighthouse");
-        const lhResult = await withTimeout(
-          lighthouse.default(url, {
-            port,
-            output: "json",
-            logLevel: "error",
-            onlyCategories: [
-              "performance",
-              "seo",
-              "accessibility",
-              "best-practices",
-            ],
-            formFactor: "desktop",
-            screenEmulation: { disabled: true },
-            maxWaitForFcp: 6_000,
-            maxWaitForLoad: 10_000,
-            locale: "en-US",
-          }),
-          remainingMs(deadlineAt, 14_000),
-          "Lighthouse timed out.",
-        );
+      }
 
-        lhReport = (lhResult?.lhr ?? {}) as Record<string, unknown>;
+      browserSucceeded = true;
+    } catch (err: unknown) {
+      if (err instanceof HumanVerificationError) throw err;
+      warnings.push({
+        id: "browser-scan",
+        title: "Browser-based scan skipped",
+        detail: `CrawlScope fell back to direct HTML analysis. ${errorMessage(err)}`,
+      });
+    } finally {
+      if (browser) {
+        try { await browser.close(); } catch { /* ignore */ }
+      }
+    }
+  } else {
+    warnings.push({
+      id: "browser-skipped",
+      title: "Browser scan skipped for speed",
+      detail: "Not enough time remaining for a full browser scan. CrawlScope analysed the page HTML directly.",
+    });
+  }
+
+  // --- Phase 2: Fallback HTML fetch (browserless) ---
+  // If the browser did not succeed, fetch raw HTML directly
+  if (!browserSucceeded) {
+    try {
+      const resp = await fetch(url, {
+        signal: AbortSignal.timeout(remainingMs(deadlineAt, 10_000)),
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "Accept-Language": "en-US,en;q=0.5",
+        },
+        redirect: "follow",
+      });
+      statusCode = resp.status;
+      htmlContent = await resp.text();
+      pageSize = htmlContent.length;
+
+      if (detectHumanVerification(htmlContent, statusCode)) {
+        throw new HumanVerificationError(
+          "This site is showing a human verification or bot protection challenge, so CrawlScope cannot scan it.",
+        );
       }
     } catch (err: unknown) {
-      warnings.push({
-        id: "lighthouse",
-        title: "Lighthouse audit skipped",
-        detail: `The scan continued with HTML analysis, but Lighthouse could not complete. ${errorMessage(err)}`,
-      });
+      if (err instanceof HumanVerificationError) throw err;
+      return createTimeoutReport(url, `Could not retrieve page content. ${errorMessage(err)}`);
     }
-  } finally {
-    await browser.close();
   }
 
   const cats = (lhReport.categories as Record<string, { score: number }>) ?? {};
