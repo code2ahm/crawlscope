@@ -60,6 +60,12 @@ export interface Screenshots {
   mobile?: string;
 }
 
+export interface ScanWarning {
+  id: string;
+  title: string;
+  detail: string;
+}
+
 export interface PageMeta {
   title: string;
   description: string;
@@ -87,6 +93,7 @@ export interface AuditReport {
   technicalChecks: AuditCheck[];
   contentChecks: AuditCheck[];
   screenshots: Screenshots;
+  warnings?: ScanWarning[];
   meta: PageMeta;
 }
 

@@ -8,6 +8,7 @@ import type {
   PageMeta,
   AuditStats,
   CheckStatus,
+  ScanWarning,
 } from "@/types/audit";
 
 function clamp(n: number, min = 0, max = 100) {
@@ -35,6 +36,10 @@ function check(
   impact?: string,
 ): AuditCheck {
   return { id, label, status, detail, helpUrl, why, fix, impact };
+}
+
+function errorMessage(err: unknown) {
+  return err instanceof Error ? err.message : "Unknown error";
 }
 
 export async function scanWebsite(rawUrl: string): Promise<AuditReport> {
@@ -67,65 +72,109 @@ export async function scanWebsite(rawUrl: string): Promise<AuditReport> {
   let statusCode = 200;
   let loadTime = 0;
   let pageSize = 0;
+  const warnings: ScanWarning[] = [];
 
   try {
     const page = await browser.newPage();
-    await page.setViewport({ width: 1280, height: 800 });
 
-    const navStart = Date.now();
-    const response = await page.goto(url, {
-      waitUntil: "networkidle2",
-      timeout: 30000,
-    });
-    loadTime = Date.now() - navStart;
-    statusCode = response?.status() ?? 200;
+    try {
+      await page.setViewport({ width: 1280, height: 800 });
 
-    // Desktop screenshot
-    const desktopBuf = await page.screenshot({
-      type: "jpeg",
-      quality: 75,
-      fullPage: false,
-    });
-    desktopScreenshot = `data:image/jpeg;base64,${Buffer.from(desktopBuf).toString("base64")}`;
+      const navStart = Date.now();
+      let response = await page
+        .goto(url, {
+          waitUntil: "networkidle2",
+          timeout: 30000,
+        })
+        .catch(async (err: unknown) => {
+          warnings.push({
+            id: "navigation-networkidle",
+            title: "Page kept loading",
+            detail: `The page did not become fully idle, so CrawlScope continued after the main document loaded. ${errorMessage(err)}`,
+          });
 
-    // Page size estimate
-    pageSize = await page.evaluate(
-      () => document.documentElement.outerHTML.length,
-    );
+          return page.goto(url, {
+            waitUntil: "domcontentloaded",
+            timeout: 30000,
+          });
+        });
 
-    // HTML for Cheerio analysis
-    htmlContent = await page.content();
+      loadTime = Date.now() - navStart;
+      statusCode = response?.status() ?? 200;
 
-    // Mobile screenshot
-    await page.setViewport({
-      width: 390,
-      height: 844,
-      isMobile: true,
-      deviceScaleFactor: 2,
-    });
-    await page.reload({ waitUntil: "networkidle2" });
-    const mobileBuf = await page.screenshot({
-      type: "jpeg",
-      quality: 75,
-      fullPage: false,
-    });
-    mobileScreenshot = `data:image/jpeg;base64,${Buffer.from(mobileBuf).toString("base64")}`;
-    await page.close();
+      try {
+        const desktopBuf = await page.screenshot({
+          type: "jpeg",
+          quality: 75,
+          fullPage: false,
+        });
+        desktopScreenshot = `data:image/jpeg;base64,${Buffer.from(desktopBuf).toString("base64")}`;
+      } catch (err: unknown) {
+        warnings.push({
+          id: "desktop-screenshot",
+          title: "Desktop screenshot skipped",
+          detail: `The scan continued, but CrawlScope could not capture the desktop screenshot. ${errorMessage(err)}`,
+        });
+      }
+
+      pageSize = await page.evaluate(
+        () => document.documentElement.outerHTML.length,
+      );
+
+      htmlContent = await page.content();
+
+      try {
+        await page.setViewport({
+          width: 390,
+          height: 844,
+          isMobile: true,
+          deviceScaleFactor: 2,
+        });
+        await page.reload({ waitUntil: "domcontentloaded", timeout: 30000 });
+        const mobileBuf = await page.screenshot({
+          type: "jpeg",
+          quality: 75,
+          fullPage: false,
+        });
+        mobileScreenshot = `data:image/jpeg;base64,${Buffer.from(mobileBuf).toString("base64")}`;
+      } catch (err: unknown) {
+        warnings.push({
+          id: "mobile-screenshot",
+          title: "Mobile screenshot skipped",
+          detail: `The scan continued, but CrawlScope could not capture the mobile screenshot. ${errorMessage(err)}`,
+        });
+      }
+    } finally {
+      await page.close();
+    }
 
     const wsEndpoint = browser.wsEndpoint();
     const port = parseInt(new URL(wsEndpoint).port, 10);
 
-    const lhResult = await lighthouse.default(url, {
-      port,
-      output: "json",
-      logLevel: "error",
-      onlyCategories: ["performance", "seo", "accessibility", "best-practices"],
-      formFactor: "desktop",
-      screenEmulation: { disabled: true },
-      locale: "en-US",
-    });
+    try {
+      const lhResult = await lighthouse.default(url, {
+        port,
+        output: "json",
+        logLevel: "error",
+        onlyCategories: [
+          "performance",
+          "seo",
+          "accessibility",
+          "best-practices",
+        ],
+        formFactor: "desktop",
+        screenEmulation: { disabled: true },
+        locale: "en-US",
+      });
 
-    lhReport = (lhResult?.lhr ?? {}) as Record<string, unknown>;
+      lhReport = (lhResult?.lhr ?? {}) as Record<string, unknown>;
+    } catch (err: unknown) {
+      warnings.push({
+        id: "lighthouse",
+        title: "Lighthouse audit skipped",
+        detail: `The scan continued with HTML analysis, but Lighthouse could not complete. ${errorMessage(err)}`,
+      });
+    }
   } finally {
     await browser.close();
   }
@@ -999,6 +1048,7 @@ export async function scanWebsite(rawUrl: string): Promise<AuditReport> {
     technicalChecks,
     contentChecks,
     screenshots,
+    warnings: warnings.length > 0 ? warnings : undefined,
     meta,
   };
 }

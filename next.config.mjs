@@ -1,88 +1,50 @@
-const lighthouseTracePackages = [
+import { readFileSync } from "node:fs";
+
+function packagePath(pkg) {
+  return `node_modules/${pkg}`;
+}
+
+function collectPackageClosure(seedPackages) {
+  let lock;
+  try {
+    lock = JSON.parse(
+      readFileSync(new URL("./package-lock.json", import.meta.url), "utf8"),
+    );
+  } catch {
+    return seedPackages;
+  }
+
+  const packages = lock.packages ?? {};
+  const seen = new Set();
+
+  function visit(pkg) {
+    if (seen.has(pkg)) return;
+
+    const entry = packages[packagePath(pkg)];
+    if (!entry) return;
+
+    seen.add(pkg);
+
+    for (const dep of Object.keys(entry.dependencies ?? {})) {
+      visit(dep);
+    }
+
+    for (const dep of Object.keys(entry.optionalDependencies ?? {})) {
+      visit(dep);
+    }
+  }
+
+  seedPackages.forEach(visit);
+  return [...new Set([...seedPackages, ...seen])];
+}
+
+const tracedPackages = collectPackageClosure([
   "lighthouse",
-  "@sentry/node",
-  "@sentry/core",
-  "@sentry/hub",
-  "@sentry/types",
-  "@sentry/utils",
-  "tslib",
-  "@sentry/minimal",
-  "cookie",
-  "https-proxy-agent",
-  "agent-base",
-  "debug",
-  "ms",
-  "lru_map",
+  "@paulirish/trace_engine",
   "axe-core",
-  "chrome-launcher",
-  "@types/node",
-  "undici-types",
-  "escape-string-regexp",
-  "is-wsl",
-  "is-docker",
-  "lighthouse-logger",
-  "marky",
-  "configstore",
-  "dot-prop",
-  "is-obj",
-  "graceful-fs",
-  "make-dir",
-  "semver",
-  "unique-string",
-  "crypto-random-string",
-  "write-file-atomic",
-  "imurmurhash",
-  "is-typedarray",
-  "signal-exit",
-  "typedarray-to-buffer",
-  "xdg-basedir",
-  "csp_evaluator",
-  "devtools-protocol",
-  "enquirer",
-  "ansi-colors",
-  "strip-ansi",
-  "ansi-regex",
-  "http-link-header",
-  "intl-messageformat",
-  "intl-messageformat-parser",
-  "jpeg-js",
-  "js-library-detector",
-  "lighthouse-stack-packs",
-  "lodash",
-  "lookup-closest-locale",
-  "metaviewport-parser",
-  "open",
-  "define-lazy-prop",
-  "parse-cache-control",
-  "ps-list",
   "puppeteer-core",
-  "@puppeteer/browsers",
-  "modern-tar",
-  "yargs",
-  "cliui",
-  "string-width",
-  "emoji-regex",
-  "is-fullwidth-code-point",
-  "wrap-ansi",
-  "ansi-styles",
-  "color-convert",
-  "color-name",
-  "escalade",
-  "get-caller-file",
-  "require-directory",
-  "y18n",
-  "yargs-parser",
-  "chromium-bidi",
-  "mitt",
-  "zod",
-  "typed-query-selector",
-  "webdriver-bidi-protocol",
-  "ws",
-  "robots-parser",
-  "speedline-core",
-  "image-ssim",
-  "third-party-web",
-];
+  "@sparticuz/chromium-min",
+]);
 
 const nextConfig = {
   serverExternalPackages: [
@@ -91,9 +53,7 @@ const nextConfig = {
     "lighthouse",
   ],
   outputFileTracingIncludes: {
-    "/api/scan": lighthouseTracePackages.map(
-      (pkg) => `./node_modules/${pkg}/**/*`,
-    ),
+    "/api/scan": tracedPackages.map((pkg) => `./node_modules/${pkg}/**/*`),
   },
 };
 

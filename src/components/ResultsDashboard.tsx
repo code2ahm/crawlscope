@@ -13,6 +13,8 @@ import {
   ChevronUp,
   FileDown,
   Search,
+  AlertTriangle,
+  X,
 } from "lucide-react";
 import type { AuditReport } from "@/types/audit";
 import { ScoreRing } from "@/components/ScoreRing";
@@ -459,7 +461,14 @@ function ExportMenu({ report }: { report: AuditReport }) {
 
 export function ResultsDashboard({ report, onReset, onRescan }: Props) {
   const [fixesOpen, setFixesOpen] = useState(true);
+  const [warningsOpen, setWarningsOpen] = useState(
+    (report.warnings?.length ?? 0) > 0,
+  );
   const grade = getGrade(report.overall);
+
+  useEffect(() => {
+    setWarningsOpen((report.warnings?.length ?? 0) > 0);
+  }, [report.scannedAt, report.warnings?.length]);
 
   const fadeUp = (delay = 0) => ({
     initial: { opacity: 0, y: 12 },
@@ -518,7 +527,104 @@ export function ResultsDashboard({ report, onReset, onRescan }: Props) {
         </div>
       </header>
 
+      <AnimatePresence>
+        {warningsOpen && report.warnings && report.warnings.length > 0 && (
+          <motion.div
+            className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/35 px-4"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+          >
+            <motion.div
+              initial={{ opacity: 0, y: 12, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 8, scale: 0.98 }}
+              transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+              className="w-full max-w-md rounded-2xl border border-amber-200 bg-white p-5 shadow-2xl"
+            >
+              <div className="flex items-start gap-3">
+                <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-600">
+                  <AlertTriangle className="h-4 w-4" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-slate-900">
+                    Scan continued with skipped steps
+                  </p>
+                  <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                    CrawlScope finished the report, but part of the scan could
+                    not complete.
+                  </p>
+                </div>
+                <button
+                  onClick={() => setWarningsOpen(false)}
+                  className="rounded-lg p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
+                  aria-label="Dismiss warning"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div className="mt-4 space-y-2">
+                {report.warnings.map((warning) => (
+                  <div
+                    key={warning.id}
+                    className="rounded-xl border border-amber-100 bg-amber-50/70 px-3 py-2.5"
+                  >
+                    <p className="text-xs font-semibold text-amber-900">
+                      {warning.title}
+                    </p>
+                    <p className="mt-0.5 text-[11px] leading-relaxed text-amber-800/80">
+                      {warning.detail}
+                    </p>
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  onClick={onRescan}
+                  className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-50"
+                >
+                  Retry scan
+                </button>
+                <button
+                  onClick={() => setWarningsOpen(false)}
+                  className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-slate-800"
+                >
+                  Continue
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <main className="max-w-6xl mx-auto px-5 py-5 space-y-4">
+        {report.warnings && report.warnings.length > 0 && (
+          <motion.div
+            {...fadeUp(0)}
+            className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50/80 p-4 text-amber-900 shadow-sm"
+          >
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-semibold">
+                Report completed with {report.warnings.length} skipped{" "}
+                {report.warnings.length === 1 ? "step" : "steps"}
+              </p>
+              <p className="mt-1 text-[11px] leading-relaxed text-amber-800/80">
+                Some optional scan data is missing, but the available checks
+                were still completed.
+              </p>
+            </div>
+            <button
+              onClick={() => setWarningsOpen(true)}
+              className="shrink-0 rounded-lg bg-white/70 px-2.5 py-1.5 text-[11px] font-semibold text-amber-800 transition-colors hover:bg-white"
+            >
+              View
+            </button>
+          </motion.div>
+        )}
+
         <motion.div
           {...fadeUp(0)}
           className="rounded-2xl bg-white/55 backdrop-blur-sm border border-white/75 shadow-sm shadow-slate-200/60 p-5"
