@@ -108,7 +108,7 @@ export async function scanWebsite(
       executablePath,
       headless: true,
     }),
-    remainingMs(deadlineAt, 15_000),
+    remainingMs(deadlineAt, 12_000),
     "Browser launch timed out.",
   );
 
@@ -131,7 +131,7 @@ export async function scanWebsite(
       let response = await page
         .goto(url, {
           waitUntil: "networkidle2",
-          timeout: remainingMs(deadlineAt, 18_000),
+          timeout: remainingMs(deadlineAt, 12_000),
         })
         .catch(async (err: unknown) => {
           warnings.push({
@@ -142,7 +142,7 @@ export async function scanWebsite(
 
           return page.goto(url, {
             waitUntil: "domcontentloaded",
-            timeout: remainingMs(deadlineAt, 8_000),
+            timeout: remainingMs(deadlineAt, 6_000),
           });
         });
 
@@ -153,10 +153,10 @@ export async function scanWebsite(
         const desktopBuf = await withTimeout(
           page.screenshot({
             type: "jpeg",
-            quality: 58,
+            quality: 45,
             fullPage: false,
           }),
-          remainingMs(deadlineAt, 5_000),
+          remainingMs(deadlineAt, 3_000),
           "Desktop screenshot timed out.",
         );
         desktopScreenshot = `data:image/jpeg;base64,${Buffer.from(desktopBuf).toString("base64")}`;
@@ -179,19 +179,19 @@ export async function scanWebsite(
           width: 390,
           height: 844,
           isMobile: true,
-          deviceScaleFactor: 2,
+          deviceScaleFactor: 1,
         });
         await page.reload({
           waitUntil: "domcontentloaded",
-          timeout: remainingMs(deadlineAt, 8_000),
+          timeout: remainingMs(deadlineAt, 5_000),
         });
         const mobileBuf = await withTimeout(
           page.screenshot({
             type: "jpeg",
-            quality: 55,
+            quality: 42,
             fullPage: false,
           }),
-          remainingMs(deadlineAt, 5_000),
+          remainingMs(deadlineAt, 3_000),
           "Mobile screenshot timed out.",
         );
         mobileScreenshot = `data:image/jpeg;base64,${Buffer.from(mobileBuf).toString("base64")}`;
@@ -210,7 +210,7 @@ export async function scanWebsite(
     const port = parseInt(new URL(wsEndpoint).port, 10);
 
     try {
-      if (!hasBudget(deadlineAt, 18_000)) {
+      if (!hasBudget(deadlineAt, 16_000)) {
         warnings.push({
           id: "lighthouse-budget",
           title: "Lighthouse audit skipped",
@@ -231,11 +231,11 @@ export async function scanWebsite(
             ],
             formFactor: "desktop",
             screenEmulation: { disabled: true },
-            maxWaitForFcp: 8_000,
-            maxWaitForLoad: 15_000,
+            maxWaitForFcp: 6_000,
+            maxWaitForLoad: 10_000,
             locale: "en-US",
           }),
-          remainingMs(deadlineAt, 18_000),
+          remainingMs(deadlineAt, 14_000),
           "Lighthouse timed out.",
         );
 
