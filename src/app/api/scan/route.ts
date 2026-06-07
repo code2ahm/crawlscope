@@ -65,8 +65,15 @@ export async function POST(
     console.error("[CrawlScope scan error]", err);
     const message =
       err instanceof Error ? err.message : "Unknown error during scan";
+    const errorCode =
+      err instanceof Error && err.name === "HumanVerificationError"
+        ? "human_verification"
+        : message.toLowerCase().includes("timed out")
+          ? "timeout"
+          : "scan_failed";
+
     return NextResponse.json(
-      { success: false, error: message },
+      { success: false, error: message, errorCode },
       { status: 500 },
     );
   }

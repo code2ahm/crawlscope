@@ -101,8 +101,14 @@ export interface ScanRequest {
   url: string;
 }
 
+export type ScanErrorCode =
+  | "human_verification"
+  | "timeout"
+  | "scan_failed";
+
 export interface ScanResponse {
   success: boolean;
   report?: AuditReport;
   error?: string;
+  errorCode?: ScanErrorCode;
 }

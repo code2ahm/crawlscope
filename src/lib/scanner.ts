@@ -42,6 +42,44 @@ function errorMessage(err: unknown) {
   return err instanceof Error ? err.message : "Unknown error";
 }
 
+export class HumanVerificationError extends Error {
+  constructor(message = "This site requires human verification before it can be scanned.") {
+    super(message);
+    this.name = "HumanVerificationError";
+  }
+}
+
+function detectHumanVerification(html: string, statusCode: number) {
+  const text = html.toLowerCase();
+  const challengeSignals = [
+    "checking if the site connection is secure",
+    "verify you are human",
+    "verify that you are human",
+    "confirm you are a human",
+    "human verification",
+    "security check",
+    "browser check",
+    "just a moment",
+    "enable javascript and cookies",
+    "cf-challenge",
+    "cf-turnstile",
+    "challenge-platform",
+    "g-recaptcha",
+    "h-captcha",
+    "hcaptcha",
+    "recaptcha",
+    "captcha",
+    "ddos-guard",
+    "attention required",
+    "access denied",
+  ];
+
+  const matches = challengeSignals.filter((signal) => text.includes(signal));
+  const challengeStatus = statusCode === 403 || statusCode === 429 || statusCode === 503;
+
+  return matches.length >= 2 || (challengeStatus && matches.length >= 1);
+}
+
 interface ScanOptions {
   deadlineAt?: number;
 }
@@ -149,6 +187,18 @@ export async function scanWebsite(
       loadTime = Date.now() - navStart;
       statusCode = response?.status() ?? 200;
 
+      pageSize = await page.evaluate(
+        () => document.documentElement.outerHTML.length,
+      );
+
+      htmlContent = await page.content();
+
+      if (detectHumanVerification(htmlContent, statusCode)) {
+        throw new HumanVerificationError(
+          "This site is showing a human verification or bot protection challenge, so CrawlScope cannot scan it from a serverless browser.",
+        );
+      }
+
       try {
         const desktopBuf = await withTimeout(
           page.screenshot({
@@ -168,33 +218,36 @@ export async function scanWebsite(
         });
       }
 
-      pageSize = await page.evaluate(
-        () => document.documentElement.outerHTML.length,
-      );
-
-      htmlContent = await page.content();
-
       try {
-        await page.setViewport({
-          width: 390,
-          height: 844,
-          isMobile: true,
-          deviceScaleFactor: 1,
-        });
-        await page.reload({
-          waitUntil: "domcontentloaded",
-          timeout: remainingMs(deadlineAt, 5_000),
-        });
-        const mobileBuf = await withTimeout(
-          page.screenshot({
-            type: "jpeg",
-            quality: 42,
-            fullPage: false,
-          }),
-          remainingMs(deadlineAt, 3_000),
-          "Mobile screenshot timed out.",
-        );
-        mobileScreenshot = `data:image/jpeg;base64,${Buffer.from(mobileBuf).toString("base64")}`;
+        if (!hasBudget(deadlineAt, 10_000)) {
+          warnings.push({
+            id: "mobile-screenshot-budget",
+            title: "Mobile screenshot skipped",
+            detail:
+              "The page used most of the scan time budget, so CrawlScope skipped the mobile screenshot and continued the report.",
+          });
+        } else {
+          await page.setViewport({
+            width: 390,
+            height: 844,
+            isMobile: true,
+            deviceScaleFactor: 1,
+          });
+          await page.reload({
+            waitUntil: "domcontentloaded",
+            timeout: remainingMs(deadlineAt, 5_000),
+          });
+          const mobileBuf = await withTimeout(
+            page.screenshot({
+              type: "jpeg",
+              quality: 42,
+              fullPage: false,
+            }),
+            remainingMs(deadlineAt, 3_000),
+            "Mobile screenshot timed out.",
+          );
+          mobileScreenshot = `data:image/jpeg;base64,${Buffer.from(mobileBuf).toString("base64")}`;
+        }
       } catch (err: unknown) {
         warnings.push({
           id: "mobile-screenshot",
