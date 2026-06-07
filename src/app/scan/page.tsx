@@ -5,6 +5,25 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { ResultsDashboard } from "@/components/ResultsDashboard";
 import { ScanLoader } from "@/components/ScanLoader";
 import type { AuditReport } from "@/types/audit";
+import type { ScanResponse } from "@/types/audit";
+
+async function readScanResponse(res: Response): Promise<ScanResponse> {
+  const contentType = res.headers.get("content-type") ?? "";
+
+  if (contentType.includes("application/json")) {
+    return res.json();
+  }
+
+  const text = await res.text();
+  const detail = text.trim().slice(0, 180);
+
+  return {
+    success: false,
+    error:
+      detail ||
+      `Scan failed with HTTP ${res.status}. The server returned a non-JSON response.`,
+  };
+}
 
 export default function ScanPage() {
   const params = useSearchParams();
@@ -35,8 +54,13 @@ export default function ScanPage() {
       body: JSON.stringify({ url }),
     })
       .then(async (res) => {
-        const data = await res.json();
-        if (!data.success) throw new Error(data.error ?? "Scan failed");
+        const data = await readScanResponse(res);
+        if (!res.ok || !data.success) {
+          throw new Error(data.error ?? `Scan failed with HTTP ${res.status}`);
+        }
+        if (!data.report) {
+          throw new Error("Scan completed without a report payload.");
+        }
         setReport(data.report);
       })
       .catch((err: Error) => setError(err.message));
