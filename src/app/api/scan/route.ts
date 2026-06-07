@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { ScanResponse } from "@/types/audit";
 
-const SCAN_DEADLINE_MS = 42_000;
+const SCAN_DEADLINE_MS = 54_000;
+const ROUTE_TIMEOUT_MS = 56_000;
 
 export const maxDuration = 60;
 export const dynamic = "force-dynamic";
@@ -57,7 +58,7 @@ export async function POST(
     const { scanWebsite } = await import("@/lib/scanner");
     const report = await withTimeout(
       scanWebsite(url, { deadlineAt: Date.now() + SCAN_DEADLINE_MS }),
-      SCAN_DEADLINE_MS,
+      ROUTE_TIMEOUT_MS,
     );
 
     return NextResponse.json({ success: true, report });

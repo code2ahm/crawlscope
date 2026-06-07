@@ -126,7 +126,6 @@ export async function scanWebsite(
 
   const chromium = await import("@sparticuz/chromium-min");
   const puppeteer = await import("puppeteer-core");
-  const lighthouse = await import("lighthouse");
   const deadlineAt = options.deadlineAt;
 
   process.env.LH_LOCALE = "en-US";
@@ -166,7 +165,7 @@ export async function scanWebsite(
       await page.setViewport({ width: 1280, height: 800 });
 
       const navStart = Date.now();
-      let response = await page
+      const response = await page
         .goto(url, {
           waitUntil: "networkidle2",
           timeout: remainingMs(deadlineAt, 12_000),
@@ -181,6 +180,14 @@ export async function scanWebsite(
           return page.goto(url, {
             waitUntil: "domcontentloaded",
             timeout: remainingMs(deadlineAt, 6_000),
+          }).catch((fallbackErr: unknown) => {
+            warnings.push({
+              id: "navigation-timeout",
+              title: "Page navigation timed out",
+              detail: `CrawlScope used the partial page HTML that loaded before navigation timed out. ${errorMessage(fallbackErr)}`,
+            });
+
+            return null;
           });
         });
 
@@ -200,16 +207,25 @@ export async function scanWebsite(
       }
 
       try {
-        const desktopBuf = await withTimeout(
-          page.screenshot({
-            type: "jpeg",
-            quality: 45,
-            fullPage: false,
-          }),
-          remainingMs(deadlineAt, 3_000),
-          "Desktop screenshot timed out.",
-        );
-        desktopScreenshot = `data:image/jpeg;base64,${Buffer.from(desktopBuf).toString("base64")}`;
+        if (!hasBudget(deadlineAt, 8_000)) {
+          warnings.push({
+            id: "desktop-screenshot-budget",
+            title: "Desktop screenshot skipped",
+            detail:
+              "The page used most of the scan time budget, so CrawlScope skipped the desktop screenshot and continued the report.",
+          });
+        } else {
+          const desktopBuf = await withTimeout(
+            page.screenshot({
+              type: "jpeg",
+              quality: 45,
+              fullPage: false,
+            }),
+            remainingMs(deadlineAt, 3_000),
+            "Desktop screenshot timed out.",
+          );
+          desktopScreenshot = `data:image/jpeg;base64,${Buffer.from(desktopBuf).toString("base64")}`;
+        }
       } catch (err: unknown) {
         warnings.push({
           id: "desktop-screenshot",
@@ -271,6 +287,7 @@ export async function scanWebsite(
             "The page used most of the scan time budget, so CrawlScope skipped Lighthouse and continued with HTML analysis.",
         });
       } else {
+        const lighthouse = await import("lighthouse");
         const lhResult = await withTimeout(
           lighthouse.default(url, {
             port,
