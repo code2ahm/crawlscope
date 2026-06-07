@@ -42,7 +42,43 @@ function errorMessage(err: unknown) {
   return err instanceof Error ? err.message : "Unknown error";
 }
 
-export async function scanWebsite(rawUrl: string): Promise<AuditReport> {
+interface ScanOptions {
+  deadlineAt?: number;
+}
+
+function remainingMs(deadlineAt: number | undefined, maxMs: number) {
+  if (!deadlineAt) return maxMs;
+  return Math.max(1_000, Math.min(maxMs, deadlineAt - Date.now() - 1_500));
+}
+
+function hasBudget(deadlineAt: number | undefined, minMs: number) {
+  return !deadlineAt || deadlineAt - Date.now() > minMs;
+}
+
+function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  message: string,
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error(message)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timeout);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timeout);
+        reject(err);
+      },
+    );
+  });
+}
+
+export async function scanWebsite(
+  rawUrl: string,
+  options: ScanOptions = {},
+): Promise<AuditReport> {
   const start = Date.now();
 
   let url = rawUrl.trim();
@@ -53,17 +89,28 @@ export async function scanWebsite(rawUrl: string): Promise<AuditReport> {
   const chromium = await import("@sparticuz/chromium-min");
   const puppeteer = await import("puppeteer-core");
   const lighthouse = await import("lighthouse");
+  const deadlineAt = options.deadlineAt;
 
   process.env.LH_LOCALE = "en-US";
 
-  const browser = await puppeteer.default.launch({
-    args: chromium.default.args,
-    defaultViewport: { width: 1280, height: 800 },
-    executablePath: await chromium.default.executablePath(
+  const executablePath = await withTimeout(
+    chromium.default.executablePath(
       "https://github.com/Sparticuz/chromium/releases/download/v131.0.1/chromium-v131.0.1-pack.tar",
     ),
-    headless: true,
-  });
+    remainingMs(deadlineAt, 12_000),
+    "Chromium startup timed out.",
+  );
+
+  const browser = await withTimeout(
+    puppeteer.default.launch({
+      args: chromium.default.args,
+      defaultViewport: { width: 1280, height: 800 },
+      executablePath,
+      headless: true,
+    }),
+    remainingMs(deadlineAt, 15_000),
+    "Browser launch timed out.",
+  );
 
   let lhReport: Record<string, unknown> = {};
   let htmlContent = "";
@@ -84,7 +131,7 @@ export async function scanWebsite(rawUrl: string): Promise<AuditReport> {
       let response = await page
         .goto(url, {
           waitUntil: "networkidle2",
-          timeout: 30000,
+          timeout: remainingMs(deadlineAt, 18_000),
         })
         .catch(async (err: unknown) => {
           warnings.push({
@@ -95,7 +142,7 @@ export async function scanWebsite(rawUrl: string): Promise<AuditReport> {
 
           return page.goto(url, {
             waitUntil: "domcontentloaded",
-            timeout: 30000,
+            timeout: remainingMs(deadlineAt, 8_000),
           });
         });
 
@@ -103,11 +150,15 @@ export async function scanWebsite(rawUrl: string): Promise<AuditReport> {
       statusCode = response?.status() ?? 200;
 
       try {
-        const desktopBuf = await page.screenshot({
-          type: "jpeg",
-          quality: 75,
-          fullPage: false,
-        });
+        const desktopBuf = await withTimeout(
+          page.screenshot({
+            type: "jpeg",
+            quality: 58,
+            fullPage: false,
+          }),
+          remainingMs(deadlineAt, 5_000),
+          "Desktop screenshot timed out.",
+        );
         desktopScreenshot = `data:image/jpeg;base64,${Buffer.from(desktopBuf).toString("base64")}`;
       } catch (err: unknown) {
         warnings.push({
@@ -130,12 +181,19 @@ export async function scanWebsite(rawUrl: string): Promise<AuditReport> {
           isMobile: true,
           deviceScaleFactor: 2,
         });
-        await page.reload({ waitUntil: "domcontentloaded", timeout: 30000 });
-        const mobileBuf = await page.screenshot({
-          type: "jpeg",
-          quality: 75,
-          fullPage: false,
+        await page.reload({
+          waitUntil: "domcontentloaded",
+          timeout: remainingMs(deadlineAt, 8_000),
         });
+        const mobileBuf = await withTimeout(
+          page.screenshot({
+            type: "jpeg",
+            quality: 55,
+            fullPage: false,
+          }),
+          remainingMs(deadlineAt, 5_000),
+          "Mobile screenshot timed out.",
+        );
         mobileScreenshot = `data:image/jpeg;base64,${Buffer.from(mobileBuf).toString("base64")}`;
       } catch (err: unknown) {
         warnings.push({
@@ -152,22 +210,37 @@ export async function scanWebsite(rawUrl: string): Promise<AuditReport> {
     const port = parseInt(new URL(wsEndpoint).port, 10);
 
     try {
-      const lhResult = await lighthouse.default(url, {
-        port,
-        output: "json",
-        logLevel: "error",
-        onlyCategories: [
-          "performance",
-          "seo",
-          "accessibility",
-          "best-practices",
-        ],
-        formFactor: "desktop",
-        screenEmulation: { disabled: true },
-        locale: "en-US",
-      });
+      if (!hasBudget(deadlineAt, 18_000)) {
+        warnings.push({
+          id: "lighthouse-budget",
+          title: "Lighthouse audit skipped",
+          detail:
+            "The page used most of the scan time budget, so CrawlScope skipped Lighthouse and continued with HTML analysis.",
+        });
+      } else {
+        const lhResult = await withTimeout(
+          lighthouse.default(url, {
+            port,
+            output: "json",
+            logLevel: "error",
+            onlyCategories: [
+              "performance",
+              "seo",
+              "accessibility",
+              "best-practices",
+            ],
+            formFactor: "desktop",
+            screenEmulation: { disabled: true },
+            maxWaitForFcp: 8_000,
+            maxWaitForLoad: 15_000,
+            locale: "en-US",
+          }),
+          remainingMs(deadlineAt, 18_000),
+          "Lighthouse timed out.",
+        );
 
-      lhReport = (lhResult?.lhr ?? {}) as Record<string, unknown>;
+        lhReport = (lhResult?.lhr ?? {}) as Record<string, unknown>;
+      }
     } catch (err: unknown) {
       warnings.push({
         id: "lighthouse",
